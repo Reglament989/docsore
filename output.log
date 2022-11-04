@@ -1,0 +1,20 @@
+[2022-11-04][20:37:13][sled::pagecache::snapshot][DEBUG] no previous snapshot found
+[2022-11-04][20:37:13][sled::pagecache::iterator][DEBUG] ordering before clearing tears: {}, max_header_stable_lsn: 0
+[2022-11-04][20:37:13][sled::pagecache::iterator][DEBUG] in clean_tail_tears, found missing item in tail: None and we'll scan segments {} above lowest lsn 0
+[2022-11-04][20:37:13][sled::pagecache::iterator][DEBUG] unable to load new segment: Io(Custom { kind: Other, error: "no segments remaining to iterate over" })
+[2022-11-04][20:37:13][sled::pagecache::iterator][DEBUG] filtering out segments after detected tear at (lsn, lid) -1
+[2022-11-04][20:37:13][sled::pagecache::iterator][DEBUG] unable to load new segment: Io(Custom { kind: Other, error: "no segments remaining to iterate over" })
+[2022-11-04][20:37:13][sled::pagecache::segment][DEBUG] SA starting with tip 0 stable -1 free {}
+[2022-11-04][20:37:13][sled::pagecache::iobuf][DEBUG] starting log for a totally fresh system
+[2022-11-04][20:37:13][sled::pagecache::segment][DEBUG] segment accountant returning offset: 0 for lsn 0 on deck: {}
+[2022-11-04][20:37:13][sled::pagecache::iobuf][DEBUG] starting IoBufs with next_lsn: 0 next_lid: 0
+[2022-11-04][20:37:13][sled::pagecache::iobuf][DEBUG] storing lsn 0 in beginning of buffer
+[2022-11-04][20:37:13][sled::pagecache][DEBUG] load_snapshot loading pages from 0..0
+[2022-11-04][20:37:13][sled::meta][DEBUG] allocated pid 3 for root of new_tree [95, 95, 115, 108, 101, 100, 95, 95, 100, 101, 102, 97, 117, 108, 116]
+[2022-11-04][20:37:13][sled::meta][DEBUG] allocated pid 5 for root of new_tree [116, 101, 115, 116]
+[2022-11-04][20:37:13][sled::pagecache::iobuf][DEBUG] advancing offset within the current segment from 0 to 178
+[2022-11-04][20:37:13][sled::pagecache::iobuf][DEBUG] wrote lsns 0-177 to disk at offsets 0-177, maxed false complete_len 178
+[2022-11-04][20:37:13][sled::pagecache::iobuf][DEBUG] mark_interval(0, 178)
+[2022-11-04][20:37:13][sled::pagecache::iobuf][DEBUG] new highest interval: 0 - 177
+[2022-11-04][20:37:13][sled::pagecache::iobuf][DEBUG] make_stable(177) returning
+[2022-11-04][20:37:13][sled::pagecache::logger][DEBUG] IoBufs dropped
