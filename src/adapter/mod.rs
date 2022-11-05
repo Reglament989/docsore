@@ -8,7 +8,7 @@ pub struct Store {
 }
 
 pub struct Collection<'a> {
-    sled: &'a sled::Db,
+    pub sled: &'a sled::Db,
     name: String,
 }
 
@@ -36,16 +36,23 @@ impl Store {
 }
 
 pub type HashIndex = Vec<u8>;
-pub type Id = [u8; 8];
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DocsoreDocument<S> {
-    relations: BTreeMap<String, Vec<Id>>,
-    id: u64,
-    body: S,
+    pub relations: BTreeMap<String, Vec<[u8; 8]>>,
+    pub id: u64,
+    pub body: S,
 }
 
-impl<S> DocsoreDocument<S> {
+impl<S: Serialize> DocsoreDocument<S> {
+    pub fn new(body: S, relations: Option<BTreeMap<String, Vec<[u8; 8]>>>) -> Self {
+        Self {
+            body,
+            id: 0,
+            relations: relations.unwrap_or_default(),
+        }
+    }
+
     pub fn make_relation<N: AsRef<str> + Ord>(&mut self, name: N, id: u64) {
         let relations = match self.relations.get_mut(name.as_ref()) {
             Some(relation) => relation,
@@ -73,6 +80,10 @@ impl<S> DocsoreDocument<S> {
             None => todo!(),
         }
     }
+
+    pub fn save(&mut self, col: &Collection) -> anyhow::Result<u64> {
+        col.put(self)
+    }
 }
 
 impl<S: Serialize> From<S> for DocsoreDocument<S> {
@@ -84,18 +95,10 @@ impl<S: Serialize> From<S> for DocsoreDocument<S> {
         }
     }
 }
+
+#[derive(Debug)]
 pub enum Filter {
     Index(HashIndex),
-}
-
-impl<S> DocsoreDocument<S> {
-    pub fn new(body: S, relations: Option<BTreeMap<String, Vec<Id>>>) -> Self {
-        Self {
-            body,
-            id: 0,
-            relations: relations.unwrap_or_default(),
-        }
-    }
 }
 
 impl<'a> Collection<'a> {
@@ -105,12 +108,11 @@ impl<'a> Collection<'a> {
             name: name.to_owned(),
         }
     }
-    pub fn put<S: Serialize>(&self, document: &mut DocsoreDocument<S>) -> anyhow::Result<u64> {
+    pub fn put<S: Serialize>(&self, document: &DocsoreDocument<S>) -> anyhow::Result<u64> {
+        assert!(document.id != 0);
         let start = Instant::now();
         let tree = self.sled.open_tree(&self.name)?;
         let codec = bincode::options();
-
-        document.id = self.sled.generate_id().unwrap();
 
         tree.insert(&document.id.to_ne_bytes(), codec.serialize(&document)?)?;
         log::info!(
@@ -143,16 +145,32 @@ impl<'a> Collection<'a> {
         &self,
         filter: Filter,
     ) -> anyhow::Result<DocsoreDocument<S>> {
+        let start = Instant::now();
         let raw = match filter {
-            Filter::Index(idx) => {
+            Filter::Index(ref idx) => {
                 let tree = self.sled.open_tree(&format!("{}_indexes", &self.name))?;
-                tree.get(&idx)?
+                tree.get(idx)?
             }
         };
 
         let codec = bincode::options();
         match raw {
-            Some(raw) => Ok(codec.deserialize(&raw)?),
+            Some(raw) => {
+                let tree = self.sled.open_tree(&self.name)?;
+                let raw = tree.get(raw)?;
+                match raw {
+                    Some(raw) => {
+                        log::info!(
+                            "Executing search by filter {:#?} in tree !{} [Elapsed: {:#?}]",
+                            &filter,
+                            &self.name,
+                            start.elapsed()
+                        );
+                        Ok(codec.deserialize(&raw)?)
+                    }
+                    None => todo!(),
+                }
+            }
             None => todo!(),
         }
     }
@@ -163,19 +181,20 @@ impl<'a> Collection<'a> {
         Ok(tree.len())
     }
 
-    pub fn relate(&self, key: &u64, relates: BTreeMap<String, u64>) -> anyhow::Result<()> {
-        let tree = self.sled.open_tree(&self.name)?;
-        log::info!(
-            "Executing relate for #{:#?} in tree !{}",
-            &relates,
-            &self.name
-        );
-        let codec = bincode::options();
-        tree.merge(&format!("{}_relates", key), codec.serialize(&relates)?)?;
-        Ok(())
-    }
+    // pub fn relate(&self, key: &u64, relates: BTreeMap<String, u64>) -> anyhow::Result<()> {
+    //     let tree = self.sled.open_tree(&self.name)?;
+    //     log::info!(
+    //         "Executing relate for #{:#?} in tree !{}",
+    //         &relates,
+    //         &self.name
+    //     );
+    //     let codec = bincode::options();
+    //     tree.merge(&format!("{}_relates", key), codec.serialize(&relates)?)?;
+    //     Ok(())
+    // }
 
     pub fn index(&self, key: &u64, indexes: Vec<HashIndex>) -> anyhow::Result<()> {
+        assert!(indexes.len() > 0);
         let tree = self.sled.open_tree(&format!("{}_indexes", &self.name))?;
         log::info!(
             "Executing indexes for #{:#?} in tree !{}",

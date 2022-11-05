@@ -21,22 +21,36 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut document: DocsoreDocument<Test> = data.clone().into();
+    document.id = store.id()?;
 
-    let key = store.collection("test")?.put(&mut document)?;
+    let key1 = store.collection("test")?.put(&mut document)?;
 
-    dbg!(store.collection("test")?.get::<Test>(&key)?);
+    let mut document: DocsoreDocument<Test> = data.clone().into();
 
-    let mut document: DocsoreDocument<Test> = data.into();
+    document.id = store.id()?;
+    document.make_relation("friends", key1);
 
-    document.make_relation("friends", key);
+    let key2 = store.collection("test")?.put(&mut document)?;
 
-    let key = store.collection("test")?.put(&mut document)?;
+    let mut document: DocsoreDocument<Test> = data.clone().into();
+    document.id = store.id()?;
+    document.make_relation("friends", key1);
+    document.make_relation("friends", key2);
+    let key3 = store.collection("test")?.put(&mut document)?;
 
-    let document = store.collection("test")?.get::<Test>(&key)?;
+    dbg!(store.collection("test")?.get::<Test>(&key3)?);
 
-    dbg!(document.relation::<&str, Test>("friends", &store.collection("test")?)?);
+    let index = seahash::hash(document.body.name.as_bytes())
+        .to_ne_bytes()
+        .to_vec();
+
+    store
+        .collection("test")?
+        .index(&document.id, vec![index.clone()])?;
 
     dbg!(store.collection("test")?.count()?);
-    dbg!(seahash::hash(b"test"));
+    dbg!(store
+        .collection("test")?
+        .search::<Test>(adapter::Filter::Index(index))?);
     Ok(())
 }
