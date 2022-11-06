@@ -1,15 +1,11 @@
-use std::{collections::BTreeMap, time::Instant};
+use std::{collections::BTreeMap, fmt::Debug};
 
-use bincode::Options;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-pub struct Store {
-    sled: sled::Db,
-}
+pub type HashIndex = Vec<u8>;
 
-pub struct Collection<'a> {
-    pub sled: &'a sled::Db,
-    name: String,
+pub struct Store {
+    pub sled: sled::Db,
 }
 
 impl Default for Store {
@@ -26,73 +22,24 @@ impl Store {
         Ok(Store { sled })
     }
 
-    pub fn collection(&self, name: &str) -> anyhow::Result<Collection> {
-        Ok(Collection::new(&self.sled, name))
-    }
-
-    pub fn id(&self) -> anyhow::Result<u64> {
+    pub fn generate_id(&self) -> anyhow::Result<u64> {
         Ok(self.sled.generate_id()?)
     }
 }
 
-pub type HashIndex = Vec<u8>;
-
 #[derive(Debug, Deserialize, Serialize)]
-pub struct DocsoreDocument<S> {
+pub struct DocsoreDocument<S: Document> {
     pub relations: BTreeMap<String, Vec<[u8; 8]>>,
     pub id: u64,
     pub body: S,
 }
 
-impl<S: Serialize> DocsoreDocument<S> {
-    pub fn new(body: S, relations: Option<BTreeMap<String, Vec<[u8; 8]>>>) -> Self {
-        Self {
-            body,
-            id: 0,
-            relations: relations.unwrap_or_default(),
-        }
-    }
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Relation(String, Vec<u8>);
 
-    pub fn make_relation<N: AsRef<str> + Ord>(&mut self, name: N, id: u64) {
-        let relations = match self.relations.get_mut(name.as_ref()) {
-            Some(relation) => relation,
-            None => {
-                self.relations.insert(name.as_ref().to_string(), vec![]);
-                self.relations.get_mut(name.as_ref()).unwrap()
-            }
-        };
-        relations.push(id.to_ne_bytes());
-    }
-
-    pub fn relation<N: AsRef<str> + Ord, D: DeserializeOwned>(
-        &self,
-        name: N,
-        col: &Collection,
-    ) -> anyhow::Result<Vec<DocsoreDocument<D>>> {
-        match self.relations.get(name.as_ref()) {
-            Some(relations) => {
-                let mut docs = vec![];
-                for relation in relations {
-                    docs.push(col.get::<D>(&u64::from_ne_bytes(*relation))?);
-                }
-                Ok(docs)
-            }
-            None => todo!(),
-        }
-    }
-
-    pub fn save(&mut self, col: &Collection) -> anyhow::Result<u64> {
-        col.put(self)
-    }
-}
-
-impl<S: Serialize> From<S> for DocsoreDocument<S> {
-    fn from(body: S) -> Self {
-        Self {
-            id: 0,
-            relations: BTreeMap::new(),
-            body,
-        }
+impl<D: Document> From<&D> for Relation {
+    fn from(doc: &D) -> Self {
+        Self(D::collection().to_string(), doc.id())
     }
 }
 
@@ -101,109 +48,117 @@ pub enum Filter {
     Index(HashIndex),
 }
 
-impl<'a> Collection<'a> {
-    pub fn new(sled: &'a sled::Db, name: &str) -> Self {
-        Self {
-            sled,
-            name: name.to_owned(),
-        }
-    }
-    pub fn put<S: Serialize>(&self, document: &DocsoreDocument<S>) -> anyhow::Result<u64> {
-        assert!(document.id != 0);
-        let start = Instant::now();
-        let tree = self.sled.open_tree(&self.name)?;
-        let codec = bincode::options();
+// pub enum Indexes {
+// HashIndex
+// }
 
-        tree.insert(&document.id.to_ne_bytes(), codec.serialize(&document)?)?;
-        log::info!(
-            "Put in tree !{} [Elapsed: {:#?}]",
-            &self.name,
-            start.elapsed()
-        );
-        Ok(document.id)
-    }
+pub trait Document: Serialize + Sized {
+    const RELATION_KEY: &'static [u8] = &[0, 1];
+    const INDEXES_KEY: &'static [u8] = &[0, 2];
 
-    pub fn get<S: DeserializeOwned>(&self, key: &u64) -> anyhow::Result<DocsoreDocument<S>> {
-        let start = Instant::now();
-        let tree = self.sled.open_tree(&self.name)?;
-        let codec = bincode::options();
+    fn collection() -> &'static str;
+    fn indexes(&self) -> Vec<HashIndex>;
+    fn id(&self) -> Vec<u8>;
 
-        let raw = tree.get(key.to_ne_bytes())?;
-        log::info!(
-            "Get by key #{} in tree !{} [Elapsed: {:#?}]",
-            key,
-            &self.name,
-            start.elapsed()
-        );
-        match raw {
-            Some(raw) => Ok(codec.deserialize::<DocsoreDocument<S>>(&raw)?),
-            None => todo!(),
-        }
-    }
-
-    pub fn search<S: DeserializeOwned>(
-        &self,
-        filter: Filter,
-    ) -> anyhow::Result<DocsoreDocument<S>> {
-        let start = Instant::now();
-        let raw = match filter {
-            Filter::Index(ref idx) => {
-                let tree = self.sled.open_tree(&format!("{}_indexes", &self.name))?;
-                tree.get(idx)?
+    fn find(store: &Store, filter: Filter) -> anyhow::Result<Self>
+    where
+        Self: DeserializeOwned,
+    {
+        match filter {
+            Filter::Index(idx) => {
+                let mut key: Vec<u8> = Self::collection().as_bytes().to_vec();
+                key.extend_from_slice(Self::INDEXES_KEY);
+                let tree = store.sled.open_tree(&key)?;
+                let key_by_index = tree.get(idx)?.ok_or(anyhow::anyhow!("Indexes not found"))?;
+                let tree = store.sled.open_tree(Self::collection())?;
+                let doc = tree
+                    .get(&key_by_index)?
+                    .ok_or(anyhow::anyhow!("Document by index not found"))?;
+                Ok(bincode::deserialize::<Self>(&doc)?)
             }
-        };
+        }
+    }
 
-        let codec = bincode::options();
+    fn save(&self, store: &Store) -> anyhow::Result<()> {
+        let tree = store.sled.open_tree(Self::collection())?;
+        tree.insert(self.id(), bincode::serialize(self)?)?;
+        Ok(())
+    }
+
+    fn make_relation(&self, store: &Store, relations: Vec<Relation>) -> anyhow::Result<()> {
+        let tree = store.sled.open_tree(Self::collection())?;
+        let mut key = self.id();
+        key.append(&mut Self::RELATION_KEY.to_vec());
+        let mut rel_ids =
+            bincode::deserialize::<Vec<Relation>>(&tree.get(&key)?.unwrap_or_default())
+                .unwrap_or_default();
+        for relation in relations {
+            rel_ids.push(relation);
+        }
+        tree.insert(key, bincode::serialize(&rel_ids)?)?;
+        Ok(())
+    }
+
+    fn relation<D: Document + DeserializeOwned>(&self, store: &Store) -> anyhow::Result<Vec<D>> {
+        let tree = store.sled.open_tree(Self::collection())?;
+        let mut key = self.id();
+        key.append(&mut Self::RELATION_KEY.to_vec());
+        let raw = tree.get(key)?;
         match raw {
-            Some(raw) => {
-                let tree = self.sled.open_tree(&self.name)?;
-                let raw = tree.get(raw)?;
-                match raw {
-                    Some(raw) => {
-                        log::info!(
-                            "Executing search by filter {:#?} in tree !{} [Elapsed: {:#?}]",
-                            &filter,
-                            &self.name,
-                            start.elapsed()
-                        );
-                        Ok(codec.deserialize(&raw)?)
+            Some(doc) => {
+                let relations: Vec<Relation> = bincode::deserialize::<Vec<Relation>>(&doc)?
+                    .into_iter()
+                    .filter(|r| r.0 == D::collection())
+                    .collect();
+                let mut docs = vec![];
+                for relation in relations {
+                    let tree = store.sled.open_tree(relation.0)?;
+                    let raw = tree.get(relation.1)?;
+                    match raw {
+                        Some(doc) => docs.push(bincode::deserialize::<D>(&doc)?),
+                        None => continue,
                     }
-                    None => todo!(),
                 }
+                Ok(docs)
             }
-            None => todo!(),
+            None => Err(anyhow::anyhow!("Relations not found")),
         }
     }
 
-    pub fn count(&self) -> anyhow::Result<usize> {
-        let tree = self.sled.open_tree(&self.name)?;
-        log::info!("Executing count in tree !{}", &self.name);
-        Ok(tree.len())
-    }
+    fn index(&self, store: &Store) -> anyhow::Result<()>
+    where
+        Self: DeserializeOwned,
+    {
+        let mut key: Vec<u8> = Self::collection().as_bytes().to_vec();
+        key.extend_from_slice(Self::INDEXES_KEY);
+        let tree = store.sled.open_tree(key)?;
+        let indexes = self.indexes();
 
-    // pub fn relate(&self, key: &u64, relates: BTreeMap<String, u64>) -> anyhow::Result<()> {
-    //     let tree = self.sled.open_tree(&self.name)?;
-    //     log::info!(
-    //         "Executing relate for #{:#?} in tree !{}",
-    //         &relates,
-    //         &self.name
-    //     );
-    //     let codec = bincode::options();
-    //     tree.merge(&format!("{}_relates", key), codec.serialize(&relates)?)?;
-    //     Ok(())
-    // }
-
-    pub fn index(&self, key: &u64, indexes: Vec<HashIndex>) -> anyhow::Result<()> {
-        assert!(indexes.len() > 0);
-        let tree = self.sled.open_tree(&format!("{}_indexes", &self.name))?;
-        log::info!(
-            "Executing indexes for #{:#?} in tree !{}",
-            &indexes,
-            &self.name
-        );
         for index in indexes {
-            tree.insert(index, &key.to_ne_bytes())?;
+            tree.insert(index, self.id())?;
         }
+        Ok(())
+    }
+
+    fn reindex(&self, store: &Store) -> anyhow::Result<()>
+    where
+        Self: DeserializeOwned,
+    {
+        let mut batch = sled::Batch::default();
+        let tree = store.sled.open_tree(Self::collection())?;
+        for raw in tree.iter() {
+            let (key, doc) = raw?;
+            let doc = bincode::deserialize::<Self>(&doc).unwrap();
+            let new_indexes = doc.indexes();
+            for idx in new_indexes {
+                batch.insert(idx, &key);
+            }
+        }
+        let mut key: Vec<u8> = Self::collection().as_bytes().to_vec();
+        key.extend_from_slice(Self::INDEXES_KEY);
+        let tree = store.sled.open_tree(key)?;
+        tree.clear()?;
+        tree.apply_batch(batch)?;
         Ok(())
     }
 }
