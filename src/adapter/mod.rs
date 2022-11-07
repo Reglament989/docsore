@@ -56,9 +56,15 @@ pub trait Document: Serialize + Sized {
     const RELATION_KEY: &'static [u8] = &[0, 1];
     const INDEXES_KEY: &'static [u8] = &[0, 2];
 
-    fn collection() -> &'static str;
-    fn indexes(&self) -> Vec<HashIndex>;
-    fn id(&self) -> Vec<u8>;
+    fn collection() -> &'static str {
+        ""
+    }
+    fn indexes(&self) -> Vec<HashIndex> {
+        vec![]
+    }
+    fn id(&self) -> Vec<u8> {
+        vec![]
+    }
 
     fn find(store: &Store, filter: Filter) -> anyhow::Result<Self>
     where

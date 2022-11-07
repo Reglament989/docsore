@@ -7,8 +7,10 @@ use crate::adapter::{DocsoreDocument, Filter, Relation};
 pub mod adapter;
 mod logger;
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, docsore_derive::Document)]
+#[docsore(collection = "persons", index = "name, id")]
 pub struct Person {
+    id: String,
     name: String,
 }
 
@@ -54,35 +56,32 @@ impl Document for Pet {
     }
 }
 
-impl Document for Person {
-    fn collection() -> &'static str {
-        "test"
-    }
+// impl Document for Person {
+//     fn collection() -> &'static str {
+//         "test"
+//     }
 
-    fn indexes(&self) -> Vec<adapter::HashIndex> {
-        vec![seahash::hash(self.name.as_bytes()).to_ne_bytes().to_vec()]
-    }
+//     fn indexes(&self) -> Vec<adapter::HashIndex> {
+//         vec![seahash::hash(self.name.as_bytes()).to_ne_bytes().to_vec()]
+//     }
 
-    fn id(&self) -> Vec<u8> {
-        (&self.name.as_bytes()).to_vec()
-    }
-}
+//     fn id(&self) -> Vec<u8> {
+//         (&self.name.as_bytes()).to_vec()
+//     }
+// }
 
 fn main() -> anyhow::Result<()> {
     logger::init()?;
 
     let store = Store::default();
     let all = std::time::Instant::now();
-    let mut game = Game {
+    let mut person = Person {
         name: "Another Game".into(),
         id: nanoid::nanoid!(),
     };
-    for _ in 0..1000 {
-        game.save(&store)?;
+    dbg!(person.indexes());
+    dbg!(Person::collection());
 
-        game.index(&store)?;
-        game.id = nanoid::nanoid!();
-    }
     dbg!(all.elapsed());
     Ok(())
 }

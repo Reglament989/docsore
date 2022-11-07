@@ -18,3 +18,5 @@ serde = { version = "1", features = ["derive"] }
 seahash = "4.1.0"
 
 nanoid = "0.4.0"
+
+docsore_derive = { path = "./docsore_derive" }
